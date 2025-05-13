@@ -17,14 +17,13 @@ rozbudować, by zaliczyć punkt OP.
 Uruchamianie – przykłady
 ------------------------
 # Slave (adres 5) na COM7
-python modbus_ascii.py --role slave --port COM7 --addr 5
+python modbus_ascii.py slave --port COM7 --addr 5
 
 # Master zapis „Hello” do Slave 5 na COM8, 2 retransmisje, timeout 1 s
-python modbus_ascii.py --role master --port COM8 --addr 5 \
-       --cmd write --text "Hello" --timeout 1.0 --retries 2
+python modbus_ascii.py master --port COM8 --addr 5 --cmd write --text "Hello IWSK" --timeout 1.0 --retries 2
 
 # Master odczyt tekstu
-python modbus_ascii.py --role master --port COM8 --addr 5 --cmd read
+python modbus_ascii.py master --port COM8 --addr 5 --cmd read
 """
 
 import argparse
