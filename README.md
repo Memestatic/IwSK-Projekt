@@ -2,6 +2,8 @@
 
 Projekt realizuje dwa główne zadania związane z komunikacją w systemach przemysłowych.
 
+Przed uruchomieniem należy zainstalować emulator com0com (NULL Modem Emulator), oraz skonfigurować odpowiednie porty COM.
+
 ## Zadania
 
 ### MODBUS-ASCII Utility
