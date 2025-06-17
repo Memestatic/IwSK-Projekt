@@ -1,241 +1,282 @@
-﻿# chat.py – RS‑232 Chat / Ping / Echo utility for IWSK project (v2)
-# --------------------------------------------------------------------
-#   author : <twoje‑nazwisko>
-#   date   : 2025‑05‑13
-#
-# Wersja 2 – uzupełniona o wszystkie OB‑wymagania:
-#   • Pełna konfiguracja znaku: --data-bits, --parity, --stop-bits
-#   • Tryb kontroli przepływu DTR/DSR: --flow dsrdtr
-#   • Dowolny terminator: --terminator none|cr|lf|crlf|hex:XXXX
-#
-# --------------------------------------------------------------------
-"""Minimalistic multi‑purpose serial utility for laboratory RS‑232 tasks.
-
-USAGE EXAMPLES
---------------
-# CHAT (interaktywnie)
-python chat.py --port COM7 --mode chat --baud 9600 --parity N --terminator crlf
-
-# PING (pomiar 5 pakietów)
-python chat.py --port COM8 --mode ping --count 5 --flow dsrdtr
-
-# ECHO (pasywny responder po drugiej stronie)
-python chat.py --port COM7 --mode echo
-
-
-#SERWER:
-    python chat.py --port COM7 --mode echo --data-bits 8 --parity N --stop-bits 1 --flow dsrdtr
-
-#KLIENT:
-    python chat.py --port COM8 --mode ping --count 5 --terminator none --flow dsrdtr
-"""
-
-import argparse
-import sys
+﻿import tkinter as tk
+from tkinter import ttk, messagebox
+import serial
 import threading
 import time
-from typing import Optional
-
-import serial
-from serial.tools import list_ports
-
-# -------------------------------------------------- helpers
-
-TERMINATORS = {
-    "none": b"",
-    "cr": b"\r",
-    "lf": b"\n",
-    "crlf": b"\r\n",
-}
 
 
-def parse_terminator(spec: str) -> bytes:
-    """Return terminator bytes for given CLI spec."""
-    spec = spec.lower()
-    if spec in TERMINATORS:
-        return TERMINATORS[spec]
-    if spec.startswith("hex:"):
-        hex_part = spec[4:]
-        if len(hex_part) % 2 != 0 or not all(c in "0123456789abcdef" for c in hex_part):
-            raise argparse.ArgumentTypeError("hex terminator must be even‑length hex string, e.g. hex:0d0a")
-        if len(hex_part) // 2 not in (1, 2):
-            raise argparse.ArgumentTypeError("terminator may contain max 2 bytes")
-        return bytes.fromhex(hex_part)
-    raise argparse.ArgumentTypeError("invalid terminator spec")
+class SerialCommunication:
+    def __init__(self, port1, port2, baudrate, data_bits, parity, stop_bits):
+        self.port1 = port1
+        self.port2 = port2
+        self.baudrate = baudrate
+        self.data_bits = data_bits
+        self.parity = parity
+        self.stop_bits = stop_bits
 
-
-PARITY_MAP = {
-    "N": serial.PARITY_NONE,
-    "E": serial.PARITY_EVEN,
-    "O": serial.PARITY_ODD,
-}
-
-STOPBITS_MAP = {
-    1: serial.STOPBITS_ONE,
-    2: serial.STOPBITS_TWO,
-}
-
-BYTESIZE_MAP = {
-    7: serial.SEVENBITS,
-    8: serial.EIGHTBITS,
-}
-
-PING_HEADER = b"\x55\xAA"  # sync pattern
-
-
-class SerialPort:
-    """Light wrapper adding hex‑dump helpers and thread‑safe close."""
-
-    def __init__(self, port: str, **kwargs):
-        self._sp = serial.Serial(port, **kwargs)
-        self._lock = threading.Lock()
-
-    def write(self, data: bytes):
-        with self._lock:
-            self._sp.write(data)
-
-    def read(self, size: int = 1) -> bytes:
-        with self._lock:
-            return self._sp.read(size)
-
-    def read_until(self, terminator: bytes = b"\n", timeout: Optional[float] = None) -> bytes:
-        """Read until *terminator* seen or *timeout* elapsed (simple variant)."""
-        start = time.perf_counter()
-        data = bytearray()
-        while True:
-            chunk = self.read(1)
-            if chunk:
-                data.extend(chunk)
-                if data.endswith(terminator):
-                    return bytes(data)
-            if timeout is not None and time.perf_counter() - start > timeout:
-                return bytes(data)
-
-    @property
-    def in_waiting(self) -> int:
-        return self._sp.in_waiting
-
-    def close(self):
-        self._sp.close()
-
-
-# -------------------------------------------------- CLI handlers
-
-def mode_chat(sp: SerialPort, term: bytes):
-    stop = False
-
-    def rx_thread():
-        nonlocal stop
+    def setup_connection(self):
+        """Ustawienie połączenia na obu portach"""
         try:
-            while not stop:
-                data = sp.read(sp.in_waiting or 1)
-                if data:
-                    try:
-                        # attempt utf‑8 decoding, fallback to hex
-                        text = data.decode()
-                        print(text, end="", flush=True)
-                    except UnicodeDecodeError:
-                        print("[RX]", data.hex(" "))
-        except serial.SerialException:
-            pass
+            self.ser1 = serial.Serial(self.port1, self.baudrate, self.data_bits, self.parity, self.stop_bits)
+            self.ser2 = serial.Serial(self.port2, self.baudrate, self.data_bits, self.parity, self.stop_bits)
+            print(f"Połączenie zostało nawiązane na portach {self.port1} i {self.port2}.")
+        except Exception as e:
+            print(f"Błąd podczas otwierania portów: {e}")
 
-    t = threading.Thread(target=rx_thread, daemon=True)
-    t.start()
-    try:
-        for line in sys.stdin:
-            sp.write(line.encode() + term)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        stop = True
-        t.join()
+    def send_data(self, data):
+        """Wysyłanie danych przez port 1"""
+        try:
+            self.ser1.write(data.encode())  # Przesyłamy dane na port1
+            print(f"Wysłano dane na {self.port1}: {data}")
+        except Exception as e:
+            print(f"Błąd wysyłania danych: {e}")
 
-
-def mode_echo(sp: SerialPort):
-    try:
+    def receive_data(self):
+        """Odbieranie danych z portu 2"""
         while True:
-            data = sp.read(sp.in_waiting or 1)
-            if data:
-                print(f"Echo {len(data)} B")
-                sp.write(data)
-    except KeyboardInterrupt:
-        pass
+            if self.ser2.in_waiting > 0:
+                data = self.ser2.read(self.ser2.in_waiting).decode()  # Odczytujemy dane z portu 2
+                print(f"Odebrano dane na {self.port2}: {data}")
+                # Wywołanie metody do wyświetlenia odebranych danych w GUI
+                app.display_received_data(data)
+            time.sleep(1)
 
+    def start_receiving(self):
+        """Uruchamiamy odbiór danych w osobnym wątku"""
+        threading.Thread(target=self.receive_data, daemon=True).start()
 
-def mode_ping(sp: SerialPort, count: int, term: bytes):
-    seq = 0
-    try:
-        for i in range(count if count > 0 else 1_000_000_000):
-            payload = PING_HEADER + seq.to_bytes(2, "big") + b"\x00\x0A" + term
-            t0 = time.perf_counter()
-            sp.write(payload)
-            reply = sp.read(len(payload))
-            if reply:
-                rtt = (time.perf_counter() - t0) * 1_000  # ms
-                print(f"Reply {seq} in {rtt:.2f} ms ({len(reply)} B)")
+    def ping(self):
+        """Funkcja PING: sprawdza czas round-trip"""
+        try:
+            ping_message = "PING"  # Wiadomość ping
+            start_time = time.perf_counter()  # Czas przed wysłaniem
+
+            # Wysyłamy wiadomość ping
+            self.ser1.write(ping_message.encode())
+
+            # Oczekiwanie na odpowiedź (czy port odbiorczy zareaguje)
+            while self.ser2.in_waiting == 0:
+                time.sleep(0.1)  # Czekamy na odpowiedź
+
+            # Odczytujemy odpowiedź z portu odbiorczego
+            response = self.ser2.read(self.ser2.in_waiting).decode()
+
+            # Sprawdzamy, czy odpowiedź jest poprawna
+            if response == ping_message:
+                end_time = time.perf_counter()  # Czas po otrzymaniu odpowiedzi
+                round_trip_delay = end_time - start_time  # Czas opóźnienia round trip
+                print(f"Ping odpowiedź: {response}, czas opóźnienia: {round_trip_delay:.4f} sekundy")
+                return round_trip_delay
             else:
-                print(f"Timeout {seq}")
-            seq = (seq + 1) & 0xFFFF
-            time.sleep(0.5)
-    except KeyboardInterrupt:
-        pass
+                print("Błąd: Odpowiedź nie jest zgodna z pingiem.")
+                return None
+        except Exception as e:
+            print(f"Błąd podczas pingowania: {e}")
+            return None
 
 
-# -------------------------------------------------- main
+class SerialPortGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Interfejs komunikacji szeregowej")
+        self.root.geometry("600x850")
 
-def available_ports() -> str:
-    ports = list_ports.comports()
-    if not ports:
-        return "<brak portów>"
-    return ", ".join(p.device for p in ports)
+        # Wybór portu nadawczego
+        self.port_label1 = tk.Label(root, text="Wybierz port nadawczy")
+        self.port_label1.grid(row=0, column=0, padx=10, pady=5, sticky="w")
+
+        self.port_combobox1 = ttk.Combobox(root, values=["COM7", "COM8"])
+        self.port_combobox1.grid(row=0, column=1, padx=10, pady=5)
+
+        self.check_port_button1 = tk.Button(root, text="Sprawdź port nadawczy", command=self.check_port1)
+        self.check_port_button1.grid(row=0, column=2, padx=10, pady=5)
+
+        # Wybór portu odbiorczego
+        self.port_label2 = tk.Label(root, text="Wybierz port odbiorczy")
+        self.port_label2.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+
+        self.port_combobox2 = ttk.Combobox(root, values=["COM7", "COM8"])
+        self.port_combobox2.grid(row=1, column=1, padx=10, pady=5)
+
+        self.check_port_button2 = tk.Button(root, text="Sprawdź port odbiorczy", command=self.check_port2)
+        self.check_port_button2.grid(row=1, column=2, padx=10, pady=5)
+
+        # Parametry transmisji
+        self.speed_label = tk.Label(root, text="Wybierz szybkość transmisji")
+        self.speed_label.grid(row=2, column=0, padx=10, pady=5, sticky="w")
+
+        self.speed_combobox = ttk.Combobox(root,
+                                           values=["150 bit/s", "300 bit/s", "600 bit/s", "1200 bit/s", "2400 bit/s",
+                                                   "4800 bit/s", "9600 bit/s", "19200 bit/s", "38400 bit/s",
+                                                   "57600 bit/s", "115200 bit/s"])
+        self.speed_combobox.grid(row=2, column=1, padx=10, pady=5)
+        self.speed_combobox.set("9600 bit/s")  # Domyślna prędkość
+
+        self.data_bits_label = tk.Label(root, text="Wybierz liczbę bitów danych")
+        self.data_bits_label.grid(row=3, column=0, padx=10, pady=5, sticky="w")
+
+        self.data_bits_combobox = ttk.Combobox(root, values=["7 bitów", "8 bitów"])
+        self.data_bits_combobox.grid(row=3, column=1, padx=10, pady=5)
+        self.data_bits_combobox.set("8 bitów")  # Domyślna liczba bitów danych
+
+        self.parity_label = tk.Label(root, text="Wybierz kontrolę parzystości")
+        self.parity_label.grid(row=4, column=0, padx=10, pady=5, sticky="w")
+
+        self.parity_combobox = ttk.Combobox(root, values=["None", "Even", "Odd"])
+        self.parity_combobox.grid(row=4, column=1, padx=10, pady=5)
+        self.parity_combobox.set("None")  # Domyślna kontrola parzystości
+
+        self.stop_bits_label = tk.Label(root, text="Wybierz liczbę bitów stopu")
+        self.stop_bits_label.grid(row=5, column=0, padx=10, pady=5, sticky="w")
+
+        self.stop_bits_combobox = ttk.Combobox(root, values=["1 bit", "2 bity"])
+        self.stop_bits_combobox.grid(row=5, column=1, padx=10, pady=5)
+        self.stop_bits_combobox.set("1 bit")  # Domyślna liczba bitów stopu
+
+        # Kontrola przepływu
+        self.flow_control_label = tk.Label(root, text="Kontrola przepływu")
+        self.flow_control_label.grid(row=6, column=0, padx=10, pady=5, sticky="w")
+
+        self.flow_control_var = tk.StringVar()
+        self.flow_control_var.set("None")
+
+        self.none_radio = tk.Radiobutton(root, text="Brak kontroli", variable=self.flow_control_var, value="None")
+        self.none_radio.grid(row=6, column=1, padx=10, pady=5, sticky="w")
+
+        self.hardware_radio = tk.Radiobutton(root, text="Sprzętowa (DTR/DSR, RTS/CTS)", variable=self.flow_control_var,
+                                             value="Hardware")
+        self.hardware_radio.grid(row=7, column=1, padx=10, pady=5, sticky="w")
+
+        self.software_radio = tk.Radiobutton(root, text="Programowa (XON/XOFF)", variable=self.flow_control_var,
+                                             value="Software")
+        self.software_radio.grid(row=8, column=1, padx=10, pady=5, sticky="w")
+
+        # Terminator
+        self.terminator_label = tk.Label(root, text="Wybierz terminator")
+        self.terminator_label.grid(row=9, column=0, padx=10, pady=5, sticky="w")
+
+        self.terminator_var = tk.StringVar()
+        self.terminator_var.set("None")  # Domyślny terminator
+
+        self.none_terminator = tk.Radiobutton(root, text="Brak terminatora", variable=self.terminator_var, value="None")
+        self.none_terminator.grid(row=9, column=1, padx=10, pady=5, sticky="w")
+
+        self.standard_terminator = tk.Radiobutton(root, text="Standardowy (CR, LF, CR-LF)",
+                                                  variable=self.terminator_var, value="Standard")
+        self.standard_terminator.grid(row=10, column=1, padx=10, pady=5, sticky="w")
+
+        self.custom_terminator = tk.Radiobutton(root, text="Własny", variable=self.terminator_var, value="Custom")
+        self.custom_terminator.grid(row=11, column=1, padx=10, pady=5, sticky="w")
+
+        self.custom_terminator_entry = tk.Entry(root)
+        self.custom_terminator_entry.grid(row=12, column=1, padx=10, pady=5)
+        self.custom_terminator_entry.config(state="disabled")
+
+        # Akcja na zmianę wyboru terminatora
+        self.terminator_var.trace("w", self.toggle_custom_terminator)
+
+        # Przycisk do uruchomienia komunikacji
+        self.start_button = tk.Button(root, text="Uruchom komunikację", command=self.start_communication)
+        self.start_button.grid(row=13, column=0, columnspan=3, padx=10, pady=10)
+
+        # Przycisk PING
+        self.ping_button = tk.Button(root, text="Ping", command=self.ping)
+        self.ping_button.grid(row=14, column=0, columnspan=3, padx=10, pady=10)
+
+        # Okno nadawania
+        self.transmit_label = tk.Label(root, text="Nadawanie")
+        self.transmit_label.grid(row=15, column=0, padx=10, pady=5, sticky="w")
+
+        self.transmit_text = tk.Text(root, height=5, width=40)
+        self.transmit_text.grid(row=16, column=0, columnspan=3, padx=10, pady=5)
+
+        self.send_button = tk.Button(root, text="Wyślij", command=self.send_data)
+        self.send_button.grid(row=17, column=0, columnspan=3, padx=10, pady=5)
+
+        # Okno odbioru
+        self.receive_label = tk.Label(root, text="Odbiór")
+        self.receive_label.grid(row=18, column=0, padx=10, pady=5, sticky="w")
+
+        self.receive_text = tk.Text(root, height=5, width=40)
+        self.receive_text.grid(row=19, column=0, columnspan=3, padx=10, pady=5)
 
 
-def build_cli():
-    p = argparse.ArgumentParser(description="RS‑232 Chat / Ping / Echo utility")
-    p.add_argument("--port", required=True, help="COM port, np. COM7 (dostępne: " + available_ports() + ")")
-    p.add_argument("--mode", choices=["chat", "echo", "ping"], default="chat")
-    p.add_argument("--baud", type=int, default=9600, help="Szybkość bit/s (150…115000)")
-    p.add_argument("--data-bits", type=int, choices=[7, 8], default=8)
-    p.add_argument("--parity", choices=["N", "E", "O"], default="N")
-    p.add_argument("--stop-bits", type=int, choices=[1, 2], default=1)
-    p.add_argument("--flow", choices=["none", "rtscts", "xonxoff", "dsrdtr"], default="none")
-    p.add_argument("--terminator", default="crlf", help="none|cr|lf|crlf|hex:XXXX (max 2 bajty)")
-    p.add_argument("--count", type=int, default=10, help="Liczba pakietów w trybie ping (0 = nieskończoność)")
-    return p
 
+    def check_port1(self):
+        port = self.port_combobox1.get()
+        if port:
+            messagebox.showinfo("Informacja", f"Port {port} jest dostępny!")
+        else:
+            messagebox.showerror("Błąd", "Wybierz port nadawczy.")
 
-def main():
-    cli = build_cli().parse_args()
+    def check_port2(self):
+        port = self.port_combobox2.get()
+        if port:
+            messagebox.showinfo("Informacja", f"Port {port} jest dostępny!")
+        else:
+            messagebox.showerror("Błąd", "Wybierz port odbiorczy.")
 
-    term = parse_terminator(cli.terminator)
+    def toggle_custom_terminator(self, *args):
+        if self.terminator_var.get() == "Custom":
+            self.custom_terminator_entry.config(state="normal")
+        else:
+            self.custom_terminator_entry.config(state="disabled")
 
-    flow_args = {
-        "rtscts": cli.flow == "rtscts",
-        "xonxoff": cli.flow == "xonxoff",
-        "dsrdtr": cli.flow == "dsrdtr",
-    }
+    def send_data(self):
+        data = self.transmit_text.get("1.0", "end-1c")
+        if data:
+            terminator = self.terminator_var.get()
+            if terminator == "Custom":
+                custom_terminator = self.custom_terminator_entry.get()
+                data += custom_terminator
+            elif terminator == "Standard":
+                data += "\r\n"
+            comm.send_data(data)
+        else:
+            messagebox.showerror("Błąd", "Brak danych do wysłania.")
 
-    sp = SerialPort(
-        cli.port,
-        baudrate=cli.baud,
-        bytesize=BYTESIZE_MAP[cli.data_bits],
-        parity=PARITY_MAP[cli.parity],
-        stopbits=STOPBITS_MAP[cli.stop_bits],
-        timeout=1,
-        write_timeout=1,
-        **flow_args,
-    )
+    def display_received_data(self, data):
+        self.receive_text.insert(tk.END, f"Odebrano: {data}\n")
 
-    try:
-        if cli.mode == "chat":
-            mode_chat(sp, term)
-        elif cli.mode == "echo":
-            mode_echo(sp)
-        else:  # ping
-            mode_ping(sp, cli.count, term)
-    finally:
-        sp.close()
+    def start_communication(self):
+        if not hasattr(self,
+                       'comm') or self.comm.ser1.is_open == False:  # Sprawdzamy, czy połączenie nie jest już otwarte
+            port1 = self.port_combobox1.get()  # Nadawczy port
+            port2 = self.port_combobox2.get()  # Odbiorczy port
+            baudrate = int(self.speed_combobox.get().split()[0])  # Prędkość transmisji
+            data_bits = 8 if self.data_bits_combobox.get() == "8 bitów" else 7
+            parity = {"None": serial.PARITY_NONE, "Even": serial.PARITY_EVEN, "Odd": serial.PARITY_ODD}[
+                self.parity_combobox.get()]
+            stop_bits = serial.STOPBITS_ONE if self.stop_bits_combobox.get() == "1 bit" else serial.STOPBITS_TWO
 
+            global comm
+            comm = SerialCommunication(port1, port2, baudrate, data_bits, parity, stop_bits)
+            comm.setup_connection()
+            comm.start_receiving()
 
-if __name__ == "__main__":
-    main()
+            self.start_button.config(text="Połączono", state="disabled")  # Zmieniamy tekst przycisku i wyłączamy go
+            messagebox.showinfo("Informacja", "Komunikacja uruchomiona!")
+        else:
+            messagebox.showinfo("Komunikacja", "Połączenie już zostało nawiązane!")
+
+    def disconnect_communication(self):
+        """Funkcja do rozłączania połączenia"""
+        if hasattr(self, 'comm') and self.comm.ser1.is_open:
+            self.comm.ser1.close()
+            self.comm.ser2.close()
+            self.start_button.config(text="Uruchom komunikację", state="normal",
+                                     command=self.start_communication)  # Przywracamy początkowy stan
+            messagebox.showinfo("Informacja", "Połączenie zostało rozłączone.")
+        else:
+            messagebox.showinfo("Informacja", "Brak aktywnego połączenia.")
+
+    def ping(self):
+        """Funkcja PING"""
+        delay = comm.ping()
+        if delay is not None:
+            messagebox.showinfo("Ping", f"Round trip delay: {delay:.4f} sekund")
+
+# Główne okno
+root = tk.Tk()
+app = SerialPortGUI(root)
+root.mainloop()
