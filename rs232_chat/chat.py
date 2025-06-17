@@ -4,21 +4,37 @@ import serial
 import threading
 import time
 
-
 class SerialCommunication:
-    def __init__(self, port1, port2, baudrate, data_bits, parity, stop_bits):
+    def __init__(self, port1, port2, baudrate, data_bits, parity, stop_bits, flow_control_var):
         self.port1 = port1
         self.port2 = port2
         self.baudrate = baudrate
         self.data_bits = data_bits
         self.parity = parity
         self.stop_bits = stop_bits
+        self.flow_control_var = flow_control_var  # Dodajemy przekazywanie flow_control_var
 
     def setup_connection(self):
         """Ustawienie połączenia na obu portach"""
         try:
-            self.ser1 = serial.Serial(self.port1, self.baudrate, self.data_bits, self.parity, self.stop_bits)
-            self.ser2 = serial.Serial(self.port2, self.baudrate, self.data_bits, self.parity, self.stop_bits)
+            # Wybór kontroli przepływu dla portu nadawczego
+            if self.flow_control_var.get() == "Hardware":
+                # Jeśli używamy sprzętowej kontroli przepływu (RTS/CTS, DTR/DSR)
+                self.ser1 = serial.Serial(self.port1, self.baudrate, self.data_bits, self.parity, self.stop_bits)
+                self.ser1.setRTS(True)  # Włączamy RTS
+                self.ser1.setDTR(True)  # Włączamy DTR
+                self.ser2 = serial.Serial(self.port2, self.baudrate, self.data_bits, self.parity, self.stop_bits)
+                self.ser2.setRTS(True)  # Włączamy RTS dla portu odbiorczego
+                self.ser2.setDTR(True)  # Włączamy DTR dla portu odbiorczego
+            elif self.flow_control_var.get() == "Software":
+                self.ser1 = serial.Serial(self.port1, self.baudrate, self.data_bits, self.parity, self.stop_bits,
+                                          xonxoff=True)  # Włączamy XON/XOFF
+                self.ser2 = serial.Serial(self.port2, self.baudrate, self.data_bits, self.parity, self.stop_bits,
+                                          xonxoff=True)  # Kontrola przepływu dla portu odbiorczego
+            else:
+                self.ser1 = serial.Serial(self.port1, self.baudrate, self.data_bits, self.parity, self.stop_bits)
+                self.ser2 = serial.Serial(self.port2, self.baudrate, self.data_bits, self.parity, self.stop_bits)
+
             print(f"Połączenie zostało nawiązane na portach {self.port1} i {self.port2}.")
         except Exception as e:
             print(f"Błąd podczas otwierania portów: {e}")
@@ -79,7 +95,7 @@ class SerialPortGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Interfejs komunikacji szeregowej")
-        self.root.geometry("600x850")
+        self.root.geometry("800x800")
 
         # Wybór portu nadawczego
         self.port_label1 = tk.Label(root, text="Wybierz port nadawczy")
@@ -143,7 +159,7 @@ class SerialPortGUI:
         self.none_radio = tk.Radiobutton(root, text="Brak kontroli", variable=self.flow_control_var, value="None")
         self.none_radio.grid(row=6, column=1, padx=10, pady=5, sticky="w")
 
-        self.hardware_radio = tk.Radiobutton(root, text="Sprzętowa (DTR/DSR, RTS/CTS)", variable=self.flow_control_var,
+        self.hardware_radio = tk.Radiobutton(root, text="Sprzętowa (RTS/CTS, DTR/DSR)", variable=self.flow_control_var,
                                              value="Hardware")
         self.hardware_radio.grid(row=7, column=1, padx=10, pady=5, sticky="w")
 
@@ -161,15 +177,22 @@ class SerialPortGUI:
         self.none_terminator = tk.Radiobutton(root, text="Brak terminatora", variable=self.terminator_var, value="None")
         self.none_terminator.grid(row=9, column=1, padx=10, pady=5, sticky="w")
 
-        self.standard_terminator = tk.Radiobutton(root, text="Standardowy (CR, LF, CR-LF)",
-                                                  variable=self.terminator_var, value="Standard")
-        self.standard_terminator.grid(row=10, column=1, padx=10, pady=5, sticky="w")
+        # Rozdzielamy terminatory standardowe na CR, LF, CR+LF
+        self.cr_terminator = tk.Radiobutton(root, text="Carriage Return (CR)", variable=self.terminator_var, value="CR")
+        self.cr_terminator.grid(row=10, column=1, padx=10, pady=5, sticky="w")
 
+        self.lf_terminator = tk.Radiobutton(root, text="Line Feed (LF)", variable=self.terminator_var, value="LF")
+        self.lf_terminator.grid(row=11, column=1, padx=10, pady=5, sticky="w")
+
+        self.crlf_terminator = tk.Radiobutton(root, text="CR + LF", variable=self.terminator_var, value="CRLF")
+        self.crlf_terminator.grid(row=12, column=1, padx=10, pady=5, sticky="w")
+
+        # Własny terminator
         self.custom_terminator = tk.Radiobutton(root, text="Własny", variable=self.terminator_var, value="Custom")
-        self.custom_terminator.grid(row=11, column=1, padx=10, pady=5, sticky="w")
+        self.custom_terminator.grid(row=13, column=1, padx=10, pady=5, sticky="w")
 
         self.custom_terminator_entry = tk.Entry(root)
-        self.custom_terminator_entry.grid(row=12, column=1, padx=10, pady=5)
+        self.custom_terminator_entry.grid(row=14, column=1, padx=10, pady=5)
         self.custom_terminator_entry.config(state="disabled")
 
         # Akcja na zmianę wyboru terminatora
@@ -177,30 +200,28 @@ class SerialPortGUI:
 
         # Przycisk do uruchomienia komunikacji
         self.start_button = tk.Button(root, text="Uruchom komunikację", command=self.start_communication)
-        self.start_button.grid(row=13, column=0, columnspan=3, padx=10, pady=10)
+        self.start_button.grid(row=15, column=0, columnspan=3, padx=10, pady=10)
 
         # Przycisk PING
         self.ping_button = tk.Button(root, text="Ping", command=self.ping)
-        self.ping_button.grid(row=14, column=0, columnspan=3, padx=10, pady=10)
+        self.ping_button.grid(row=16, column=0, columnspan=3, padx=10, pady=10)
 
         # Okno nadawania
         self.transmit_label = tk.Label(root, text="Nadawanie")
-        self.transmit_label.grid(row=15, column=0, padx=10, pady=5, sticky="w")
+        self.transmit_label.grid(row=3, column=2, padx=10, pady=5, sticky="w")
 
         self.transmit_text = tk.Text(root, height=5, width=40)
-        self.transmit_text.grid(row=16, column=0, columnspan=3, padx=10, pady=5)
+        self.transmit_text.grid(row=4, column=2, columnspan=3, padx=10, pady=5)
 
         self.send_button = tk.Button(root, text="Wyślij", command=self.send_data)
-        self.send_button.grid(row=17, column=0, columnspan=3, padx=10, pady=5)
+        self.send_button.grid(row=5, column=2, columnspan=3, padx=10, pady=5)
 
         # Okno odbioru
         self.receive_label = tk.Label(root, text="Odbiór")
-        self.receive_label.grid(row=18, column=0, padx=10, pady=5, sticky="w")
+        self.receive_label.grid(row=6, column=2, padx=10, pady=5, sticky="w")
 
         self.receive_text = tk.Text(root, height=5, width=40)
-        self.receive_text.grid(row=19, column=0, columnspan=3, padx=10, pady=5)
-
-
+        self.receive_text.grid(row=7, column=2, columnspan=3, padx=10, pady=5)
 
     def check_port1(self):
         port = self.port_combobox1.get()
@@ -225,13 +246,37 @@ class SerialPortGUI:
     def send_data(self):
         data = self.transmit_text.get("1.0", "end-1c")
         if data:
+            flow_control = self.flow_control_var.get()
+
+            # Obsługa sprzętowej kontroli przepływu
+            if flow_control == "Hardware":
+                # Używamy obiektu comm (instancja SerialCommunication), aby uzyskać dostęp do ser1 i ser2
+                comm.ser1.setRTS(True)  # Ustawienie RTS
+                comm.ser1.setDTR(True)  # Ustawienie DTR
+                # Możesz dodać więcej logiki, aby monitorować stan CTS/DSR, jeśli potrzebujesz
+
+            # Obsługa programowej kontroli przepływu (XON/XOFF)
+            elif flow_control == "Software":
+                comm.ser1.write(b'\x11')  # Wysyłanie XON
+                comm.ser1.write(b'\x13')  # Wysyłanie XOFF
+
+            # Wysyłanie danych z odpowiednim terminatorem
             terminator = self.terminator_var.get()
             if terminator == "Custom":
                 custom_terminator = self.custom_terminator_entry.get()
-                data += custom_terminator
-            elif terminator == "Standard":
-                data += "\r\n"
-            comm.send_data(data)
+                if custom_terminator:  # Upewniamy się, że użytkownik wprowadził wartość
+                    data += custom_terminator
+                else:
+                    messagebox.showerror("Błąd", "Proszę podać niestandardowy terminator.")
+                    return
+            elif terminator == "CR":
+                data += "\r"  # Tylko CR
+            elif terminator == "LF":
+                data += "\n"  # Tylko LF
+            elif terminator == "CRLF":
+                data += "\r\n"  # CR + LF
+
+            comm.send_data(data)  # Wysyłamy dane
         else:
             messagebox.showerror("Błąd", "Brak danych do wysłania.")
 
@@ -250,7 +295,7 @@ class SerialPortGUI:
             stop_bits = serial.STOPBITS_ONE if self.stop_bits_combobox.get() == "1 bit" else serial.STOPBITS_TWO
 
             global comm
-            comm = SerialCommunication(port1, port2, baudrate, data_bits, parity, stop_bits)
+            comm = SerialCommunication(port1, port2, baudrate, data_bits, parity, stop_bits, self.flow_control_var)
             comm.setup_connection()
             comm.start_receiving()
 
