@@ -3,6 +3,7 @@ from tkinter import ttk, messagebox
 import serial
 import threading
 import time
+import serial.tools.list_ports
 
 class SerialCommunication:
     def __init__(self, port1, port2, baudrate, data_bits, parity, stop_bits, flow_control_var):
@@ -12,7 +13,7 @@ class SerialCommunication:
         self.data_bits = data_bits
         self.parity = parity
         self.stop_bits = stop_bits
-        self.flow_control_var = flow_control_var  # Dodajemy przekazywanie flow_control_var
+        self.flow_control_var = flow_control_var
 
     def setup_connection(self):
         """Ustawienie połączenia na obu portach"""
@@ -20,17 +21,18 @@ class SerialCommunication:
             # Wybór kontroli przepływu dla portu nadawczego
             if self.flow_control_var.get() == "Hardware":
                 # Jeśli używamy sprzętowej kontroli przepływu (RTS/CTS, DTR/DSR)
-                self.ser1 = serial.Serial(self.port1, self.baudrate, self.data_bits, self.parity, self.stop_bits)
-                self.ser1.setRTS(True)  # Włączamy RTS
-                self.ser1.setDTR(True)  # Włączamy DTR
-                self.ser2 = serial.Serial(self.port2, self.baudrate, self.data_bits, self.parity, self.stop_bits)
-                self.ser2.setRTS(True)  # Włączamy RTS dla portu odbiorczego
-                self.ser2.setDTR(True)  # Włączamy DTR dla portu odbiorczego
+                self.ser1 = serial.Serial(port=self.port1, baudrate=self.baudrate, bytesize=self.data_bits,
+                                          parity=self.parity, stopbits=self.stop_bits, dsrdtr=True)
+
+                self.ser2 = serial.Serial(port=self.port2, baudrate=self.baudrate, bytesize=self.data_bits,
+                                          parity=self.parity, stopbits=self.stop_bits, dsrdtr=True)
+
             elif self.flow_control_var.get() == "Software":
-                self.ser1 = serial.Serial(self.port1, self.baudrate, self.data_bits, self.parity, self.stop_bits,
-                                          xonxoff=True)  # Włączamy XON/XOFF
-                self.ser2 = serial.Serial(self.port2, self.baudrate, self.data_bits, self.parity, self.stop_bits,
-                                          xonxoff=True)  # Kontrola przepływu dla portu odbiorczego
+                self.ser1 = serial.Serial(port=self.port1, baudrate=self.baudrate, bytesize=self.data_bits,
+                                          parity=self.parity, stopbits=self.stop_bits, xonxoff=True)
+
+                self.ser2 = serial.Serial(port=self.port2, baudrate=self.baudrate, bytesize=self.data_bits,
+                                          parity=self.parity, stopbits=self.stop_bits, xonxoff=True)
             else:
                 self.ser1 = serial.Serial(self.port1, self.baudrate, self.data_bits, self.parity, self.stop_bits)
                 self.ser2 = serial.Serial(self.port2, self.baudrate, self.data_bits, self.parity, self.stop_bits)
@@ -97,11 +99,14 @@ class SerialPortGUI:
         self.root.title("Interfejs komunikacji szeregowej")
         self.root.geometry("800x800")
 
+        # Wykrycie dostępnych portów COM
+        available_ports = [p.device for p in serial.tools.list_ports.comports() if 'COM' in p.device]
+
         # Wybór portu nadawczego
         self.port_label1 = tk.Label(root, text="Wybierz port nadawczy")
         self.port_label1.grid(row=0, column=0, padx=10, pady=5, sticky="w")
 
-        self.port_combobox1 = ttk.Combobox(root, values=["COM7", "COM8"])
+        self.port_combobox1 = ttk.Combobox(root, values=available_ports)
         self.port_combobox1.grid(row=0, column=1, padx=10, pady=5)
 
         self.check_port_button1 = tk.Button(root, text="Sprawdź port nadawczy", command=self.check_port1)
@@ -111,7 +116,7 @@ class SerialPortGUI:
         self.port_label2 = tk.Label(root, text="Wybierz port odbiorczy")
         self.port_label2.grid(row=1, column=0, padx=10, pady=5, sticky="w")
 
-        self.port_combobox2 = ttk.Combobox(root, values=["COM7", "COM8"])
+        self.port_combobox2 = ttk.Combobox(root, values=available_ports)
         self.port_combobox2.grid(row=1, column=1, padx=10, pady=5)
 
         self.check_port_button2 = tk.Button(root, text="Sprawdź port odbiorczy", command=self.check_port2)
@@ -223,19 +228,35 @@ class SerialPortGUI:
         self.receive_text = tk.Text(root, height=5, width=40)
         self.receive_text.grid(row=7, column=2, columnspan=3, padx=10, pady=5)
 
+        self.start_button.config(state="disabled")
+        self.send_button.config(state="disabled")
+        self.ping_button.config(state="disabled")
+
+        self.port_combobox1.bind("<<ComboboxSelected>>", self._update_start_button)
+        self.port_combobox2.bind("<<ComboboxSelected>>", self._update_start_button)
+
+    def _update_start_button(self, event=None):
+        # włączamy Start tylko gdy oba porty są wybrane
+        if self.port_combobox1.get() and self.port_combobox2.get():
+            self.start_button.config(state="normal")
+        else:
+            self.start_button.config(state="disabled")
+
     def check_port1(self):
         port = self.port_combobox1.get()
-        if port:
+        ports = [p.device for p in serial.tools.list_ports.comports() if 'COM' in p.device]
+        if port in ports:
             messagebox.showinfo("Informacja", f"Port {port} jest dostępny!")
         else:
-            messagebox.showerror("Błąd", "Wybierz port nadawczy.")
+            messagebox.showerror("Błąd", f"Port {port} nie istnieje lub jest niedostępny.")
 
     def check_port2(self):
         port = self.port_combobox2.get()
-        if port:
+        ports = [p.device for p in serial.tools.list_ports.comports() if 'COM' in p.device]
+        if port in ports:
             messagebox.showinfo("Informacja", f"Port {port} jest dostępny!")
         else:
-            messagebox.showerror("Błąd", "Wybierz port odbiorczy.")
+            messagebox.showerror("Błąd", f"Port {port} nie istnieje lub jest niedostępny.")
 
     def toggle_custom_terminator(self, *args):
         if self.terminator_var.get() == "Custom":
@@ -247,18 +268,6 @@ class SerialPortGUI:
         data = self.transmit_text.get("1.0", "end-1c")
         if data:
             flow_control = self.flow_control_var.get()
-
-            # Obsługa sprzętowej kontroli przepływu
-            if flow_control == "Hardware":
-                # Używamy obiektu comm (instancja SerialCommunication), aby uzyskać dostęp do ser1 i ser2
-                comm.ser1.setRTS(True)  # Ustawienie RTS
-                comm.ser1.setDTR(True)  # Ustawienie DTR
-                # Możesz dodać więcej logiki, aby monitorować stan CTS/DSR, jeśli potrzebujesz
-
-            # Obsługa programowej kontroli przepływu (XON/XOFF)
-            elif flow_control == "Software":
-                comm.ser1.write(b'\x11')  # Wysyłanie XON
-                comm.ser1.write(b'\x13')  # Wysyłanie XOFF
 
             # Wysyłanie danych z odpowiednim terminatorem
             terminator = self.terminator_var.get()
@@ -284,6 +293,10 @@ class SerialPortGUI:
         self.receive_text.insert(tk.END, f"Odebrano: {data}\n")
 
     def start_communication(self):
+        if not self.port_combobox1.get() or not self.port_combobox2.get():
+            messagebox.showerror("Błąd", "Wybierz oba porty przed uruchomieniem.")
+            return
+
         if not hasattr(self,
                        'comm') or self.comm.ser1.is_open == False:  # Sprawdzamy, czy połączenie nie jest już otwarte
             port1 = self.port_combobox1.get()  # Nadawczy port
@@ -299,21 +312,13 @@ class SerialPortGUI:
             comm.setup_connection()
             comm.start_receiving()
 
-            self.start_button.config(text="Połączono", state="disabled")  # Zmieniamy tekst przycisku i wyłączamy go
+            self.start_button.config(state="disabled", text="Połączono")
+            self.send_button.config(state="normal")
+            self.ping_button.config(state="normal")
+
             messagebox.showinfo("Informacja", "Komunikacja uruchomiona!")
         else:
             messagebox.showinfo("Komunikacja", "Połączenie już zostało nawiązane!")
-
-    def disconnect_communication(self):
-        """Funkcja do rozłączania połączenia"""
-        if hasattr(self, 'comm') and self.comm.ser1.is_open:
-            self.comm.ser1.close()
-            self.comm.ser2.close()
-            self.start_button.config(text="Uruchom komunikację", state="normal",
-                                     command=self.start_communication)  # Przywracamy początkowy stan
-            messagebox.showinfo("Informacja", "Połączenie zostało rozłączone.")
-        else:
-            messagebox.showinfo("Informacja", "Brak aktywnego połączenia.")
 
     def ping(self):
         """Funkcja PING"""
