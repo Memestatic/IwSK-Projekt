@@ -19,8 +19,8 @@ class SerialCommunication:
         """Ustawienie połączenia na obu portach"""
         try:
 
-            self.ser1 = serial.Serial(self.port1, self.baudrate, self.data_bits, self.parity, self.stop_bits)
-            self.ser2 = serial.Serial(self.port2, self.baudrate, self.data_bits, self.parity, self.stop_bits)
+            self.ser1 = serial.Serial(port=self.port1, baudrate=self.baudrate, bytesize=self.data_bits, parity=self.parity, stopbits=self.stop_bits)
+            self.ser2 = serial.Serial(port=self.port2, baudrate=self.baudrate, bytesize=self.data_bits, parity=self.parity, stopbits=self.stop_bits)
 
             if self.flow_control_var.get() == "dsrdtr":
                 self.ser1.dsrdtr = True
@@ -39,6 +39,8 @@ class SerialCommunication:
     def send_data(self, data):
         """Wysyłanie danych przez port 1"""
         try:
+            self.ser1.reset_input_buffer()
+            self.ser2.reset_input_buffer()
             self.ser1.write(data.encode())  # Przesyłamy dane na port1
             print(f"Wysłano dane na {self.port1}: {data}")
         except Exception as e:
