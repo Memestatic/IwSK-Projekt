@@ -18,24 +18,19 @@ class SerialCommunication:
     def setup_connection(self):
         """Ustawienie połączenia na obu portach"""
         try:
-            # Wybór kontroli przepływu dla portu nadawczego
-            if self.flow_control_var.get() == "Hardware":
-                # Jeśli używamy sprzętowej kontroli przepływu (RTS/CTS, DTR/DSR)
-                self.ser1 = serial.Serial(port=self.port1, baudrate=self.baudrate, bytesize=self.data_bits,
-                                          parity=self.parity, stopbits=self.stop_bits, dsrdtr=True)
 
-                self.ser2 = serial.Serial(port=self.port2, baudrate=self.baudrate, bytesize=self.data_bits,
-                                          parity=self.parity, stopbits=self.stop_bits, dsrdtr=True)
+            self.ser1 = serial.Serial(self.port1, self.baudrate, self.data_bits, self.parity, self.stop_bits)
+            self.ser2 = serial.Serial(self.port2, self.baudrate, self.data_bits, self.parity, self.stop_bits)
 
-            elif self.flow_control_var.get() == "Software":
-                self.ser1 = serial.Serial(port=self.port1, baudrate=self.baudrate, bytesize=self.data_bits,
-                                          parity=self.parity, stopbits=self.stop_bits, xonxoff=True)
-
-                self.ser2 = serial.Serial(port=self.port2, baudrate=self.baudrate, bytesize=self.data_bits,
-                                          parity=self.parity, stopbits=self.stop_bits, xonxoff=True)
-            else:
-                self.ser1 = serial.Serial(self.port1, self.baudrate, self.data_bits, self.parity, self.stop_bits)
-                self.ser2 = serial.Serial(self.port2, self.baudrate, self.data_bits, self.parity, self.stop_bits)
+            if self.flow_control_var.get() == "dsrdtr":
+                self.ser1.dsrdtr = True
+                self.ser2.dsrdtr = True
+            elif self.flow_control_var.get() == "rtscts":
+                self.ser1.rtscts = True
+                self.ser2.rtscts = True
+            elif self.flow_control_var.get() == "xonxoff":
+                self.ser1.xonxoff = True
+                self.ser2.xonxoff = True
 
             print(f"Połączenie zostało nawiązane na portach {self.port1} i {self.port2}.")
         except Exception as e:
@@ -164,40 +159,45 @@ class SerialPortGUI:
         self.none_radio = tk.Radiobutton(root, text="Brak kontroli", variable=self.flow_control_var, value="None")
         self.none_radio.grid(row=6, column=1, padx=10, pady=5, sticky="w")
 
-        self.hardware_radio = tk.Radiobutton(root, text="Sprzętowa (RTS/CTS, DTR/DSR)", variable=self.flow_control_var,
-                                             value="Hardware")
-        self.hardware_radio.grid(row=7, column=1, padx=10, pady=5, sticky="w")
+        self.rtscts_radio = tk.Radiobutton(root, text="Sprzętowa RTS/CTS", variable=self.flow_control_var,
+                                             value="rtscts")
+        self.rtscts_radio.grid(row=7, column=1, padx=10, pady=5, sticky="w")
+
+        self.dsrdtr_radio = tk.Radiobutton(root, text="Sprzętowa DSR/DTR", variable=self.flow_control_var,
+                                             value="dtrdsr")
+
+        self.dsrdtr_radio.grid(row=8, column=1, padx=10, pady=5, sticky="w")
 
         self.software_radio = tk.Radiobutton(root, text="Programowa (XON/XOFF)", variable=self.flow_control_var,
-                                             value="Software")
-        self.software_radio.grid(row=8, column=1, padx=10, pady=5, sticky="w")
+                                             value="xonxoff")
+        self.software_radio.grid(row=9, column=1, padx=10, pady=5, sticky="w")
 
         # Terminator
         self.terminator_label = tk.Label(root, text="Wybierz terminator")
-        self.terminator_label.grid(row=9, column=0, padx=10, pady=5, sticky="w")
+        self.terminator_label.grid(row=10, column=0, padx=10, pady=5, sticky="w")
 
         self.terminator_var = tk.StringVar()
         self.terminator_var.set("None")  # Domyślny terminator
 
         self.none_terminator = tk.Radiobutton(root, text="Brak terminatora", variable=self.terminator_var, value="None")
-        self.none_terminator.grid(row=9, column=1, padx=10, pady=5, sticky="w")
+        self.none_terminator.grid(row=10, column=1, padx=10, pady=5, sticky="w")
 
-        # Rozdzielamy terminatory standardowe na CR, LF, CR+LF
+        # Podzial terminatorow standardowych na CR, LF, CR+LF
         self.cr_terminator = tk.Radiobutton(root, text="Carriage Return (CR)", variable=self.terminator_var, value="CR")
-        self.cr_terminator.grid(row=10, column=1, padx=10, pady=5, sticky="w")
+        self.cr_terminator.grid(row=11, column=1, padx=10, pady=5, sticky="w")
 
         self.lf_terminator = tk.Radiobutton(root, text="Line Feed (LF)", variable=self.terminator_var, value="LF")
-        self.lf_terminator.grid(row=11, column=1, padx=10, pady=5, sticky="w")
+        self.lf_terminator.grid(row=12, column=1, padx=10, pady=5, sticky="w")
 
         self.crlf_terminator = tk.Radiobutton(root, text="CR + LF", variable=self.terminator_var, value="CRLF")
-        self.crlf_terminator.grid(row=12, column=1, padx=10, pady=5, sticky="w")
+        self.crlf_terminator.grid(row=13, column=1, padx=10, pady=5, sticky="w")
 
         # Własny terminator
         self.custom_terminator = tk.Radiobutton(root, text="Własny", variable=self.terminator_var, value="Custom")
-        self.custom_terminator.grid(row=13, column=1, padx=10, pady=5, sticky="w")
+        self.custom_terminator.grid(row=14, column=1, padx=10, pady=5, sticky="w")
 
         self.custom_terminator_entry = tk.Entry(root)
-        self.custom_terminator_entry.grid(row=14, column=1, padx=10, pady=5)
+        self.custom_terminator_entry.grid(row=15, column=1, padx=10, pady=5)
         self.custom_terminator_entry.config(state="disabled")
 
         # Akcja na zmianę wyboru terminatora
@@ -205,11 +205,11 @@ class SerialPortGUI:
 
         # Przycisk do uruchomienia komunikacji
         self.start_button = tk.Button(root, text="Uruchom komunikację", command=self.start_communication)
-        self.start_button.grid(row=15, column=0, columnspan=3, padx=10, pady=10)
+        self.start_button.grid(row=16, column=0, columnspan=3, padx=10, pady=10)
 
         # Przycisk PING
         self.ping_button = tk.Button(root, text="Ping", command=self.ping)
-        self.ping_button.grid(row=16, column=0, columnspan=3, padx=10, pady=10)
+        self.ping_button.grid(row=17, column=0, columnspan=3, padx=10, pady=10)
 
         # Okno nadawania
         self.transmit_label = tk.Label(root, text="Nadawanie")
