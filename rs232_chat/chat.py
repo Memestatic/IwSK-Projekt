@@ -1,4 +1,6 @@
-﻿import tkinter as tk
+﻿import re
+import tkinter as tk
+from tabnanny import check
 from tkinter import ttk, messagebox
 import serial
 import threading
@@ -16,21 +18,21 @@ class SerialCommunication:
         self.stop_bits = stop_bits
         self.flow_control_var = flow_control_var
 
-        # flaga do włączania/wyłączania automatycznego odbioru
-        self.receiving_enabled = True
-
     def setup_connection(self):
         """Ustawienie połączenia na obu portach"""
         try:
             self.ser1 = serial.Serial(self.port1, self.baudrate,
                                       bytesize=self.data_bits,
                                       parity=self.parity,
-                                      stopbits=self.stop_bits)
+                                      stopbits=self.stop_bits,
+                                      dsrdtr=False,
+                                      xonxoff=False)
             self.ser2 = serial.Serial(self.port2, self.baudrate,
                                       bytesize=self.data_bits,
                                       parity=self.parity,
-                                      stopbits=self.stop_bits)
-
+                                      stopbits=self.stop_bits,
+                                      dsrdtr=False,
+                                      xonxoff=False)
             if self.flow_control_var.get() == "dsrdtr":
                 self.ser1.dsrdtr = True
                 self.ser2.dsrdtr = True
@@ -49,9 +51,6 @@ class SerialCommunication:
         """
         Zamyka oba porty szeregowe i wyłącza odbiór w tle.
         """
-        # wyłącz odbiór zanim zamkniesz porty
-        self.receiving_enabled = False
-
         try:
             if hasattr(self, 'ser1') and self.ser1.is_open:
                 self.ser1.close()
@@ -61,37 +60,6 @@ class SerialCommunication:
         except Exception as e:
             print(f"Błąd podczas rozłączania: {e}")
 
-    def receive_data(self):
-        """Odbieranie danych z portu 2 w tle (daemon thread)."""
-        while True:
-            try:
-                # jeśli port zamknięty, przerywamy pętlę
-                if not hasattr(self, 'ser2') or not self.ser2.is_open:
-                    print("receive_data: port2 zamknięty, wychodzę z wątku.")
-                    break
-
-                # tylko gdy enabled i są dane
-                if self.receiving_enabled and self.ser2.in_waiting > 0:
-                    raw = self.ser2.read(self.ser2.in_waiting)
-                    # konwersja wg trybu GUI
-                    if app.mode_var.get() == 'hex':
-                        display = raw.hex(' ').upper()
-                    else:
-                        display = raw.decode(errors='replace')
-                    print(f"Odebrano dane na {self.port2}: {display}")
-                    app.display_received_data(display)
-
-            except serial.SerialException as e:
-                # najczęściej: port został zamknięty pod spodem
-                print(f"receive_data: SerialException ({e}), wychodzę z wątku.")
-                break
-
-            time.sleep(0.1)
-
-    def start_receiving(self):
-        """Uruchamiamy odbiór danych w osobnym wątku"""
-        threading.Thread(target=self.receive_data, daemon=True).start()
-
     def transaction(self, data, timeout=1.0):
         """
         Wysyła `data` (bytes lub str) i czeka maksymalnie `timeout` sekund na odpowiedź.
@@ -100,7 +68,6 @@ class SerialCommunication:
         try:
             # 1) reset bufora
             self.ser2.reset_input_buffer()
-            self.receiving_enabled = False
 
             # 2) wysyłka: bytes lub str
             if isinstance(data, (bytes, bytearray)):
@@ -131,37 +98,50 @@ class SerialCommunication:
             return None
 
         finally:
-            self.receiving_enabled = True
             self.ser2.reset_input_buffer()
 
-    def ping(self):
-        """Funkcja PING: sprawdza czas round-trip"""
-        try:
-            ping_message = "PING"  # Wiadomość ping
-            start_time = time.perf_counter()  # Czas przed wysłaniem
+    def ping(self, timeout=1.0):
+        """
+        Wysyła 'PING' na ser1, ser2 odsyła echo natychmiast,
+        a następnie mierzy, ile czasu zajęła cała pętla ser1→ser2→ser1.
+        Zwraca RTT w sekundach albo None, jeśli timeout.
+        """
+        ping_bytes = b"PING"
+        # oczyść oba bufory od wszelkich starych danych
+        self.ser1.reset_input_buffer()
+        self.ser2.reset_input_buffer()
 
-            # Wysyłamy wiadomość ping
-            self.ser1.write(ping_message.encode())
+        start = time.perf_counter()
+        # 1) Wyślij PING
+        self.ser1.write(ping_bytes)
+        self.ser1.flush()
 
-            # Oczekiwanie na odpowiedź (czy port odbiorczy zareaguje)
-            while self.ser2.in_waiting == 0:
-                time.sleep(0.1)  # Czekamy na odpowiedź
-
-            # Odczytujemy odpowiedź z portu odbiorczego
-            response = self.ser2.read(self.ser2.in_waiting).decode()
-
-            # Sprawdzamy, czy odpowiedź jest poprawna
-            if response == ping_message:
-                end_time = time.perf_counter()  # Czas po otrzymaniu odpowiedzi
-                round_trip_delay = end_time - start_time  # Czas opóźnienia round trip
-                print(f"Ping odpowiedź: {response}, czas opóźnienia: {round_trip_delay:.4f} sekundy")
-                return round_trip_delay
-            else:
-                print("Błąd: Odpowiedź nie jest zgodna z pingiem.")
+        # 2) Czekaj na PING na ser2
+        t0 = start
+        while self.ser2.in_waiting < len(ping_bytes):
+            if time.perf_counter() - t0 > timeout:
+                print("Ping: timeout oczekiwania na ser2")
                 return None
-        except Exception as e:
-            print(f"Błąd podczas pingowania: {e}")
-            return None
+            time.sleep(0.005)
+        data = self.ser2.read(self.ser2.in_waiting)
+
+        # 3) Echo z powrotem na ser2 → ser1
+        self.ser2.write(data)
+        self.ser2.flush()
+
+        # 4) Czekaj na echo na ser1
+        while self.ser1.in_waiting < len(data):
+            if time.perf_counter() - t0 > timeout:
+                print("Ping: timeout oczekiwania na echo na ser1")
+                return None
+            time.sleep(0.005)
+        _ = self.ser1.read(self.ser1.in_waiting)
+
+        # 5) Koniec pomiaru
+        end = time.perf_counter()
+        rtt = end - start
+        print(f"Ping RTT: {rtt:.6f} s")
+        return rtt
 
 
 class SerialPortGUI:
@@ -327,6 +307,11 @@ class SerialPortGUI:
         self.send_button.config(state="disabled")
         self.ping_button.config(state="disabled")
 
+        self.cts_label = tk.Label(root, text="CTS: ?")
+        self.cts_label.grid(row=14, column=2, padx=10, pady=2, sticky="w")
+        self.dsr_label = tk.Label(root, text="DSR: ?")
+        self.dsr_label.grid(row=15, column=2, padx=10, pady=2, sticky="w")
+
         self.port_combobox1.bind("<<ComboboxSelected>>", self._update_start_button)
 
     def load_binary_file(self):
@@ -360,6 +345,12 @@ class SerialPortGUI:
 
     def toggle_rts(self):
         comm.ser1.rts = self.rts_var.get()
+
+    def get_dsr(self) -> bool:
+        return comm.ser2.dsr
+
+    def get_cts(self) -> bool:
+        return comm.ser2.cts
 
     def _update_start_button(self, event=None):
         if self.port_combobox1.get():
@@ -413,7 +404,7 @@ class SerialPortGUI:
             term_bytes = b""
         payload += term_bytes
         # wysyłka jako transakcja
-        timeout = 1.0
+        timeout = 5.0
         resp = comm.transaction(payload, timeout=timeout)
         if resp is None:
             messagebox.showwarning("Transakcja", f"Brak odpowiedzi w ciągu {timeout:.2f} s.")
@@ -430,23 +421,38 @@ class SerialPortGUI:
         self.receive_text.insert(tk.END, f"Odebrano: {data}\n")
 
     def detect_paired_port(self, port_tx):
+        """
+        Znajduje drugi koniec wirtualnej pary, wykorzystując ostatni
+        numeryczny segment hwid i XOR z 1.
+        """
+        # 1) pobierz listę portów
         ports = list(serial.tools.list_ports.comports())
-        # 1) jeśli są tylko dwa – bierz drugi
-        if len(ports) == 2:
-            return next(p.device for p in ports if p.device != port_tx)
-
-        # 2) VID/PID
+        # 2) znajdź obiekt dla port_tx
         target = next((p for p in ports if p.device == port_tx), None)
-        if target and target.vid and target.pid:
-            for p in ports:
-                if p.device != port_tx and p.vid == target.vid and p.pid == target.pid:
-                    return p.device
+        if not target or not target.hwid:
+            return None
 
-        # 3) fallback po manufacturer/product
-        if target:
-            for p in ports:
-                if p.device != port_tx and p.manufacturer == target.manufacturer and p.product == target.product:
-                    return p.device
+        # 3) rozbij hwid i weź ostatni segment
+        #    np. "VSBC9\\DEVICES\\0002" → "0002"
+        m = re.search(r'\\([^\\]+)$', target.hwid)
+        if not m:
+            return None
+        suffix = m.group(1)
+
+        # 4) spróbuj przekonwertować suffix na int i obliczyć partnera
+        try:
+            n = int(suffix, 10)
+            partner_n = n ^ 1
+        except ValueError:
+            return None
+
+        # 5) zbuduj string partnerSuffix o tej samej długości (z zerami wiodącymi)
+        partner_suffix = str(partner_n).zfill(len(suffix))
+
+        # 6) znajdź port, którego hwid kończy się na "\\partner_suffix"
+        for p in ports:
+            if p.device != port_tx and p.hwid.endswith(f"\\{partner_suffix}"):
+                return p.device
 
         return None
 
@@ -472,7 +478,6 @@ class SerialPortGUI:
         global comm
         comm = SerialCommunication(port1, port2, baudrate, data_bits, parity, stop_bits, self.flow_control_var)
         comm.setup_connection()
-        comm.start_receiving()
 
         if self.flow_control_var.get() == "manual":
             if 'comm' in globals():
@@ -484,6 +489,8 @@ class SerialPortGUI:
         self.ping_button.config(state="normal")
         self.disconnect_button.config(state="normal")
         messagebox.showinfo("Informacja", f"Komunikacja uruchomiona!\nTX={port1} → RX={port2}")
+
+        self.update_signal_status()
 
     def disconnect(self):
         if 'comm' in globals():
@@ -504,6 +511,23 @@ class SerialPortGUI:
         delay = comm.ping()
         if delay is not None:
             messagebox.showinfo("Ping", f"Round trip delay: {delay:.4f} sekund")
+
+    def update_signal_status(self):
+        """Cyklicznie odczytuje CTS/DSR i aktualizuje etykiety."""
+        try:
+            cts = self.get_cts()
+            dsr = self.get_dsr()
+            if (self.flow_control_var.get() == 'manual'):
+                self.cts_label.config(text=f"CTS: {'ON' if cts else 'OFF'}")
+                self.dsr_label.config(text=f"DSR: {'ON' if dsr else 'OFF'}")
+        except Exception:
+            # jeśli jeszcze nie ma comm albo porty są zamknięte
+            self.cts_label.config(text="CTS: ?")
+            self.dsr_label.config(text="DSR: ?")
+        finally:
+            # planujemy kolejne wywołanie za 200 ms
+            self.root.after(200, self.update_signal_status)
+
 
 # Główne okno
 root = tk.Tk()
